@@ -44,7 +44,7 @@ else
 /**
  * This class represents a general purpose, recursive mutex.
  */
-class Mutex :
+shared class Mutex_ :
     Object.Monitor
 {
     ////////////////////////////////////////////////////////////////////////////
@@ -62,7 +62,7 @@ class Mutex :
     {
         version( Windows )
         {
-            InitializeCriticalSection( &m_hndl );
+            InitializeCriticalSection( handleAddr() );
         }
         else version( Posix )
         {
@@ -75,11 +75,11 @@ class Mutex :
             if( pthread_mutexattr_settype( &attr, PTHREAD_MUTEX_RECURSIVE ) )
                 throw new SyncException( "Unable to initialize mutex" );
 
-            if( pthread_mutex_init( &m_hndl, &attr ) )
+            if( pthread_mutex_init( handleAddr(), &attr ) )
                 throw new SyncException( "Unable to initialize mutex" );
         }
         m_proxy.link = this;
-        this.__monitor = &m_proxy;
+        this.__monitor = cast(void*)&m_proxy;
     }
 
 
@@ -97,7 +97,7 @@ class Mutex :
     body
     {
         this();
-        o.__monitor = &m_proxy;
+        o.__monitor = cast(void*)&m_proxy;
     }
 
 
@@ -105,11 +105,11 @@ class Mutex :
     {
         version( Windows )
         {
-            DeleteCriticalSection( &m_hndl );
+            DeleteCriticalSection( handleAddr() );
         }
         else version( Posix )
         {
-            int rc = pthread_mutex_destroy( &m_hndl );
+            int rc = pthread_mutex_destroy( handleAddr() );
             assert( !rc, "Unable to destroy mutex" );
         }
         this.__monitor = null;
@@ -132,11 +132,11 @@ class Mutex :
     {
         version( Windows )
         {
-            EnterCriticalSection( &m_hndl );
+            EnterCriticalSection( handleAddr() );
         }
         else version( Posix )
         {
-            int rc = pthread_mutex_lock( &m_hndl );
+            int rc = pthread_mutex_lock( handleAddr() );
             if( rc )
                 throw new SyncException( "Unable to lock mutex" );
         }
@@ -154,11 +154,11 @@ class Mutex :
     {
         version( Windows )
         {
-            LeaveCriticalSection( &m_hndl );
+            LeaveCriticalSection( handleAddr() );
         }
         else version( Posix )
         {
-            int rc = pthread_mutex_unlock( &m_hndl );
+            int rc = pthread_mutex_unlock( handleAddr() );
             if( rc )
                 throw new SyncException( "Unable to unlock mutex" );
         }
@@ -180,11 +180,11 @@ class Mutex :
     {
         version( Windows )
         {
-            return TryEnterCriticalSection( &m_hndl ) != 0;
+            return TryEnterCriticalSection( handleAddr() ) != 0;
         }
         else version( Posix )
         {
-            return pthread_mutex_trylock( &m_hndl ) == 0;
+            return pthread_mutex_trylock( handleAddr() ) == 0;
         }
     }
 
@@ -208,15 +208,23 @@ private:
 
 
 package:
+    version( Windows)
+    {
+        CRITICAL_SECTION* handleAddr()
+        {
+            return cast(CRITICAL_SECTION*)&m_hndl;
+        }
+    }
     version( Posix )
     {
         pthread_mutex_t* handleAddr()
         {
-            return &m_hndl;
+            return cast(pthread_mutex_t*)&m_hndl;
         }
     }
 }
 
+alias Mutex = shared(Mutex_);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Unit Tests

@@ -36,7 +36,7 @@ class Object
     int      opCmp(Object o);
     bool     opEquals(Object o);
 
-    interface Monitor
+    shared interface Monitor
     {
         void lock();
         void unlock();

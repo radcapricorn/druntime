@@ -227,7 +227,9 @@ const uint GCVERSION = 1;       // increment every time we change interface
                                 // to GC.
 
 // This just makes Mutex final to de-virtualize member function calls.
-final class GCMutex : Mutex {}
+final shared class GCMutex_ : Mutex_ {}
+
+alias GCMutex = shared(GCMutex_);
 
 class GC
 {
@@ -241,13 +243,13 @@ class GC
 
     // We can't allocate a Mutex on the GC heap because we are the GC.
     // Store it in the static data segment instead.
-    __gshared GCMutex gcLock;    // global lock
+    shared static GCMutex gcLock;    // global lock
     __gshared byte[__traits(classInstanceSize, GCMutex)] mutexStorage;
 
     void initialize()
     {
-        mutexStorage[] = typeid(GCMutex).init[];
-        gcLock = cast(GCMutex) mutexStorage.ptr;
+        mutexStorage[] = cast(byte[])typeid(GCMutex_).init[];
+        gcLock = cast(GCMutex)mutexStorage.ptr;
         gcLock.__ctor();
         gcx = cast(Gcx*)cstdlib.calloc(1, Gcx.sizeof);
         if (!gcx)

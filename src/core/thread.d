@@ -1461,7 +1461,7 @@ private:
     {
         foreach (ref lock; _locks)
         {
-            lock[] = typeid(Mutex).init[];
+            lock[] = cast(byte[])typeid(Mutex_).init[];
             (cast(Mutex)lock.ptr).__ctor();
         }
     }

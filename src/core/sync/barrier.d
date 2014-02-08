@@ -42,7 +42,7 @@ else version( Posix )
  * This class represents a barrier across which threads may only travel in
  * groups of a specific size.
  */
-class Barrier
+shared class Barrier_
 {
     ////////////////////////////////////////////////////////////////////////////
     // Initialization
@@ -110,6 +110,8 @@ private:
     uint        m_limit;
     uint        m_count;
 }
+
+alias Barrier = shared(Barrier_);
 
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -57,7 +57,7 @@ else
  * with "notify" to indicate that control is not transferred to the waiter when
  * a notification is sent.
  */
-class Semaphore
+shared class Semaphore_
 {
     ////////////////////////////////////////////////////////////////////////////
     // Initialization
@@ -89,7 +89,7 @@ class Semaphore
         }
         else version( Posix )
         {
-            int rc = sem_init( &m_hndl, 0, count );
+            int rc = sem_init( cast(sem_t*)&m_hndl, 0, count );
             if( rc )
                 throw new SyncException( "Unable to create semaphore" );
         }
@@ -110,7 +110,7 @@ class Semaphore
         }
         else version( Posix )
         {
-            int rc = sem_destroy( &m_hndl );
+            int rc = sem_destroy( cast(sem_t*)&m_hndl );
             assert( !rc, "Unable to destroy semaphore" );
         }
     }
@@ -152,7 +152,7 @@ class Semaphore
         {
             while( true )
             {
-                if( !sem_wait( &m_hndl ) )
+                if( !sem_wait( cast(sem_t*)&m_hndl ) )
                     return;
                 if( errno != EINTR )
                     throw new SyncException( "Unable to wait for semaphore" );
@@ -248,7 +248,7 @@ class Semaphore
 
             while( true )
             {
-                if( !sem_timedwait( &m_hndl, &t ) )
+                if( !sem_timedwait( cast(sem_t*)&m_hndl, &t ) )
                     return true;
                 if( errno == ETIMEDOUT )
                     return false;
@@ -281,7 +281,7 @@ class Semaphore
         }
         else version( Posix )
         {
-            int rc = sem_post( &m_hndl );
+            int rc = sem_post( cast(sem_t*)&m_hndl );
             if( rc )
                 throw new SyncException( "Unable to notify semaphore" );
         }
@@ -320,7 +320,7 @@ class Semaphore
         {
             while( true )
             {
-                if( !sem_trywait( &m_hndl ) )
+                if( !sem_trywait( cast(sem_t*)&m_hndl ) )
                     return true;
                 if( errno == EAGAIN )
                     return false;
@@ -345,6 +345,8 @@ private:
         sem_t   m_hndl;
     }
 }
+
+alias Semaphore = shared(Semaphore_);
 
 
 ////////////////////////////////////////////////////////////////////////////////

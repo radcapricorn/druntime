@@ -116,7 +116,7 @@ class Object
         return this is o;
     }
 
-    interface Monitor
+    shared interface Monitor
     {
         void lock();
         void unlock();
@@ -1719,7 +1719,7 @@ struct ModuleInfo
 // Monitor
 ///////////////////////////////////////////////////////////////////////////////
 
-alias Object.Monitor        IMonitor;
+alias shared(Object.Monitor)        IMonitor;
 alias void delegate(Object) DEvent;
 
 // NOTE: The dtor callback feature is only supported for monitors that are not

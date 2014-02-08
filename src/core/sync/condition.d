@@ -53,7 +53,7 @@ else
  * indicate that control is not transferred to the waiter when a notification
  * is sent.
  */
-class Condition
+shared class Condition_
 {
     ////////////////////////////////////////////////////////////////////////////
     // Initialization
@@ -89,7 +89,7 @@ class Condition
         else version( Posix )
         {
             m_assocMutex = m;
-            int rc = pthread_cond_init( &m_hndl, null );
+            int rc = pthread_cond_init( cast(pthread_cond_t*)&m_hndl, null );
             if( rc )
                 throw new SyncException( "Unable to initialize condition" );
         }
@@ -108,7 +108,7 @@ class Condition
         }
         else version( Posix )
         {
-            int rc = pthread_cond_destroy( &m_hndl );
+            int rc = pthread_cond_destroy( cast(pthread_cond_t*)&m_hndl );
             assert( !rc, "Unable to destroy condition" );
         }
     }
@@ -150,7 +150,7 @@ class Condition
         }
         else version( Posix )
         {
-            int rc = pthread_cond_wait( &m_hndl, m_assocMutex.handleAddr() );
+            int rc = pthread_cond_wait( cast(pthread_cond_t*)&m_hndl, m_assocMutex.handleAddr() );
             if( rc )
                 throw new SyncException( "Unable to wait for condition" );
         }
@@ -198,7 +198,7 @@ class Condition
             timespec t = void;
             mktspec( t, val );
 
-            int rc = pthread_cond_timedwait( &m_hndl,
+            int rc = pthread_cond_timedwait( cast(pthread_cond_t*)&m_hndl,
                                              m_assocMutex.handleAddr(),
                                              &t );
             if( !rc )
@@ -224,7 +224,7 @@ class Condition
         }
         else version( Posix )
         {
-            int rc = pthread_cond_signal( &m_hndl );
+            int rc = pthread_cond_signal( cast(pthread_cond_t*)&m_hndl );
             if( rc )
                 throw new SyncException( "Unable to notify condition" );
         }
@@ -245,7 +245,7 @@ class Condition
         }
         else version( Posix )
         {
-            int rc = pthread_cond_broadcast( &m_hndl );
+            int rc = pthread_cond_broadcast( cast(pthread_cond_t*)&m_hndl );
             if( rc )
                 throw new SyncException( "Unable to notify condition" );
         }
@@ -423,6 +423,7 @@ private:
     }
 }
 
+alias Condition = shared(Condition_);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Unit Tests

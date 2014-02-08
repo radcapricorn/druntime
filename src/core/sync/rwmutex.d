@@ -52,7 +52,7 @@ else version( Posix )
  * an issue however, because it is uncommon to call deeply into unknown code
  * while holding a lock that simply protects data.
  */
-class ReadWriteMutex
+shared class ReadWriteMutex_
 {
     /**
      * Defines the policy used by this mutex.  Currently, two policies are
@@ -168,7 +168,7 @@ class ReadWriteMutex
      * This class can be considered a mutex in its own right, and is used to
      * negotiate a read lock for the enclosing mutex.
      */
-    class Reader :
+    shared class Reader_ :
         Object.Monitor
     {
         /**
@@ -177,7 +177,7 @@ class ReadWriteMutex
         this()
         {
             m_proxy.link = this;
-            this.__monitor = &m_proxy;
+            this.__monitor = cast(void*)&m_proxy;
         }
 
 
@@ -260,6 +260,8 @@ class ReadWriteMutex
 
         MonitorProxy    m_proxy;
     }
+    
+    alias Reader = shared(Reader_);
 
 
     ////////////////////////////////////////////////////////////////////////////
@@ -271,7 +273,7 @@ class ReadWriteMutex
      * This class can be considered a mutex in its own right, and is used to
      * negotiate a write lock for the enclosing mutex.
      */
-    class Writer :
+    shared class Writer_ :
         Object.Monitor
     {
         /**
@@ -280,7 +282,7 @@ class ReadWriteMutex
         this()
         {
             m_proxy.link = this;
-            this.__monitor = &m_proxy;
+            this.__monitor = cast(void*)&m_proxy;
         }
 
 
@@ -377,6 +379,8 @@ class ReadWriteMutex
         MonitorProxy    m_proxy;
     }
 
+    alias Writer = shared(Writer_);
+
 
 private:
     Policy      m_policy;
@@ -393,6 +397,7 @@ private:
     int         m_numActiveWriters;
 }
 
+alias ReadWriteMutex = shared(ReadWriteMutex_);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Unit Tests
