@@ -199,7 +199,7 @@ private:
         pthread_mutex_t     m_hndl;
     }
 
-    struct MonitorProxy
+    shared struct MonitorProxy
     {
         Object.Monitor link;
     }
@@ -234,14 +234,14 @@ alias Mutex = shared(Mutex_);
 version( unittest )
 {
     private import core.thread;
-
+    private import core.atomic;
 
     unittest
     {
-        auto mutex      = new Mutex;
-        int  numThreads = 10;
-        int  numTries   = 1000;
-        int  lockCount  = 0;
+        auto       mutex      = new Mutex;
+        enum   int numThreads = 10;
+        enum   int numTries   = 1000;
+        shared int lockCount  = 0;
 
         void testFn()
         {
@@ -249,7 +249,7 @@ version( unittest )
             {
                 synchronized( mutex )
                 {
-                    ++lockCount;
+                    ++lockCount.assumeLocal;
                 }
             }
         }
@@ -260,6 +260,6 @@ version( unittest )
             group.create( &testFn );
 
         group.joinAll();
-        assert( lockCount == numThreads * numTries );
+        assert( lockCount.assumeLocal == numThreads * numTries );
     }
 }

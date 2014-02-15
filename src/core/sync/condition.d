@@ -37,6 +37,7 @@ else
     static assert(false, "Platform not supported");
 }
 
+import core.atomic;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Condition
@@ -73,17 +74,19 @@ shared class Condition_
     {
         version( Windows )
         {
-            m_blockLock = CreateSemaphoreA( null, 1, 1, null );
-            if( m_blockLock == m_blockLock.init )
+            auto sem = CreateSemaphoreA( null, 1, 1, null );
+            if( sem == sem.init )
                 throw new SyncException( "Unable to initialize condition" );
-            scope(failure) CloseHandle( m_blockLock );
+            atomicStore!( MemoryOrder.rel )( m_blockLock, cast(shared) sem );
+            scope(failure) CloseHandle( cast(HANDLE) m_blockLock );
 
-            m_blockQueue = CreateSemaphoreA( null, 0, int.max, null );
-            if( m_blockQueue == m_blockQueue.init )
+            sem = CreateSemaphoreA( null, 0, int.max, null );
+            if( sem == sem.init )
                 throw new SyncException( "Unable to initialize condition" );
-            scope(failure) CloseHandle( m_blockQueue );
+            atomicStore!( MemoryOrder.rel )( m_blockQueue, cast(shared) sem );
+            scope(failure) CloseHandle( cast(HANDLE) m_blockQueue );
 
-            InitializeCriticalSection( &m_unblockLock );
+            InitializeCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
             m_assocMutex = m;
         }
         else version( Posix )
@@ -100,11 +103,11 @@ shared class Condition_
     {
         version( Windows )
         {
-            BOOL rc = CloseHandle( m_blockLock );
+            BOOL rc = CloseHandle( cast(HANDLE) m_blockLock );
             assert( rc, "Unable to destroy condition" );
-            rc = CloseHandle( m_blockQueue );
+            rc = CloseHandle( cast(HANDLE) m_blockQueue );
             assert( rc, "Unable to destroy condition" );
-            DeleteCriticalSection( &m_unblockLock );
+            DeleteCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
         }
         else version( Posix )
         {
@@ -261,87 +264,87 @@ private:
             int   numWaitersGone;
             DWORD rc;
 
-            rc = WaitForSingleObject( m_blockLock, INFINITE );
+            rc = WaitForSingleObject( cast(HANDLE) m_blockLock, INFINITE );
             assert( rc == WAIT_OBJECT_0 );
 
-            m_numWaitersBlocked++;
+            atomicOp!"+="( m_numWaitersBlocked, 1 );
 
-            rc = ReleaseSemaphore( m_blockLock, 1, null );
+            rc = ReleaseSemaphore( cast(HANDLE) m_blockLock, 1, null );
             assert( rc );
 
             m_assocMutex.unlock();
             scope(failure) m_assocMutex.lock();
 
-            rc = WaitForSingleObject( m_blockQueue, timeout );
+            rc = WaitForSingleObject( cast(HANDLE) m_blockQueue, timeout );
             assert( rc == WAIT_OBJECT_0 || rc == WAIT_TIMEOUT );
             bool timedOut = (rc == WAIT_TIMEOUT);
 
-            EnterCriticalSection( &m_unblockLock );
-            scope(failure) LeaveCriticalSection( &m_unblockLock );
+            EnterCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
+            scope(failure) LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
 
-            if( (numSignalsLeft = m_numWaitersToUnblock) != 0 )
+            if( (numSignalsLeft = m_numWaitersToUnblock.assumeLocal) != 0 )
             {
                 if ( timedOut )
                 {
                     // timeout (or canceled)
-                    if( m_numWaitersBlocked != 0 )
+                    if( atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked ) != 0 )
                     {
-                        m_numWaitersBlocked--;
+                        atomicOp!"-="( m_numWaitersBlocked, 1 );
                         // do not unblock next waiter below (already unblocked)
                         numSignalsLeft = 0;
                     }
                     else
                     {
                         // spurious wakeup pending!!
-                        m_numWaitersGone = 1;
+                        m_numWaitersGone.assumeLocal = 1;
                     }
                 }
-                if( --m_numWaitersToUnblock == 0 )
+                if( --m_numWaitersToUnblock.assumeLocal == 0 )
                 {
-                    if( m_numWaitersBlocked != 0 )
+                    if( atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked ) != 0 )
                     {
                         // open the gate
-                        rc = ReleaseSemaphore( m_blockLock, 1, null );
+                        rc = ReleaseSemaphore( cast(HANDLE) m_blockLock, 1, null );
                         assert( rc );
                         // do not open the gate below again
                         numSignalsLeft = 0;
                     }
-                    else if( (numWaitersGone = m_numWaitersGone) != 0 )
+                    else if( (numWaitersGone = m_numWaitersGone.assumeLocal) != 0 )
                     {
-                        m_numWaitersGone = 0;
+                        m_numWaitersGone.assumeLocal = 0;
                     }
                 }
             }
-            else if( ++m_numWaitersGone == int.max / 2 )
+            else if( ++m_numWaitersGone.assumeLocal == int.max / 2 )
             {
                 // timeout/canceled or spurious event :-)
-                rc = WaitForSingleObject( m_blockLock, INFINITE );
+                rc = WaitForSingleObject( cast(HANDLE) m_blockLock, INFINITE );
                 assert( rc == WAIT_OBJECT_0 );
                 // something is going on here - test of timeouts?
-                m_numWaitersBlocked -= m_numWaitersGone;
-                rc = ReleaseSemaphore( m_blockLock, 1, null );
+                atomicOp!"-="( m_numWaitersBlocked, m_numWaitersGone.assumeLocal );
+                rc = ReleaseSemaphore( cast(HANDLE) m_blockLock, 1, null );
                 assert( rc == WAIT_OBJECT_0 );
-                m_numWaitersGone = 0;
+                m_numWaitersGone.assumeLocal = 0;
             }
 
-            LeaveCriticalSection( &m_unblockLock );
+            LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
 
             if( numSignalsLeft == 1 )
             {
                 // better now than spurious later (same as ResetEvent)
                 for( ; numWaitersGone > 0; --numWaitersGone )
                 {
-                    rc = WaitForSingleObject( m_blockQueue, INFINITE );
+                    rc = WaitForSingleObject( cast(HANDLE) m_blockQueue, INFINITE );
                     assert( rc == WAIT_OBJECT_0 );
                 }
                 // open the gate
-                rc = ReleaseSemaphore( m_blockLock, 1, null );
+                rc = ReleaseSemaphore( cast(HANDLE) m_blockLock, 1, null );
                 assert( rc );
             }
             else if( numSignalsLeft != 0 )
             {
                 // unblock next waiter
-                rc = ReleaseSemaphore( m_blockQueue, 1, null );
+                rc = ReleaseSemaphore( cast(HANDLE) m_blockQueue, 1, null );
                 assert( rc );
             }
             m_assocMutex.lock();
@@ -353,54 +356,54 @@ private:
         {
             DWORD rc;
 
-            EnterCriticalSection( &m_unblockLock );
-            scope(failure) LeaveCriticalSection( &m_unblockLock );
+            EnterCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
+            scope(failure) LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
 
-            if( m_numWaitersToUnblock != 0 )
+            if( m_numWaitersToUnblock.assumeLocal != 0 )
             {
-                if( m_numWaitersBlocked == 0 )
+                if( atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked ) == 0 )
                 {
-                    LeaveCriticalSection( &m_unblockLock );
+                    LeaveCriticalSection( cast(CRITICAL_SECTION*)&m_unblockLock );
                     return;
                 }
                 if( all )
                 {
-                    m_numWaitersToUnblock += m_numWaitersBlocked;
-                    m_numWaitersBlocked = 0;
+                    m_numWaitersToUnblock.assumeLocal += atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked );
+                    atomicStore!( MemoryOrder.rel )( m_numWaitersBlocked, 0 );
                 }
                 else
                 {
-                    m_numWaitersToUnblock++;
-                    m_numWaitersBlocked--;
+                    ++m_numWaitersToUnblock.assumeLocal;
+                    atomicOp!"-="( m_numWaitersBlocked, 1 );
                 }
-                LeaveCriticalSection( &m_unblockLock );
+                LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
             }
-            else if( m_numWaitersBlocked > m_numWaitersGone )
+            else if( atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked ) > m_numWaitersGone.assumeLocal )
             {
-                rc = WaitForSingleObject( m_blockLock, INFINITE );
+                rc = WaitForSingleObject( cast(HANDLE) m_blockLock, INFINITE );
                 assert( rc == WAIT_OBJECT_0 );
-                if( 0 != m_numWaitersGone )
+                if( 0 != m_numWaitersGone.assumeLocal )
                 {
-                    m_numWaitersBlocked -= m_numWaitersGone;
-                    m_numWaitersGone = 0;
+                    atomicOp!"-="( m_numWaitersBlocked, m_numWaitersGone.assumeLocal );
+                    m_numWaitersGone.assumeLocal = 0;
                 }
                 if( all )
                 {
-                    m_numWaitersToUnblock = m_numWaitersBlocked;
-                    m_numWaitersBlocked = 0;
+                    m_numWaitersToUnblock.assumeLocal = atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked );
+                    atomicStore!( MemoryOrder.rel )( m_numWaitersBlocked, 0 );
                 }
                 else
                 {
-                    m_numWaitersToUnblock = 1;
-                    m_numWaitersBlocked--;
+                    m_numWaitersToUnblock.assumeLocal = 1;
+                    atomicOp!"-="( m_numWaitersBlocked, 1 );
                 }
-                LeaveCriticalSection( &m_unblockLock );
-                rc = ReleaseSemaphore( m_blockQueue, 1, null );
+                LeaveCriticalSection( cast(CRITICAL_SECTION*)&m_unblockLock );
+                rc = ReleaseSemaphore( cast(HANDLE) m_blockQueue, 1, null );
                 assert( rc );
             }
             else
             {
-                LeaveCriticalSection( &m_unblockLock );
+                LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
             }
         }
 
@@ -439,16 +442,15 @@ version( unittest )
 
     void testNotify()
     {
-        auto mutex      = new Mutex;
-        auto condReady  = new Condition( mutex );
-        auto semDone    = new Semaphore;
-        auto synLoop    = new Object;
-        int  numWaiters = 10;
-        int  numTries   = 10;
-        int  numReady   = 0;
-        int  numTotal   = 0;
-        int  numDone    = 0;
-        int  numPost    = 0;
+        auto        mutex      = new Mutex;
+        auto        condReady  = new Condition( mutex );
+        auto        semDone    = new Semaphore;
+        auto        synLoop    = new Object;
+        enum   int  numWaiters = 10;
+        enum   int  numTries   = 10;
+        shared int  numReady   = 0;
+        shared int  numTotal   = 0;
+        shared int  numDone    = 0;
 
         void waiter()
         {
@@ -456,17 +458,17 @@ version( unittest )
             {
                 synchronized( mutex )
                 {
-                    while( numReady < 1 )
+                    while( numReady.assumeLocal < 1 )
                     {
                         condReady.wait();
                     }
-                    --numReady;
-                    ++numTotal;
+                    --numReady.assumeLocal;
+                    ++numTotal.assumeLocal;
                 }
 
                 synchronized( synLoop )
                 {
-                    ++numDone;
+                    ++numDone.assumeLocal;
                 }
                 semDone.wait();
             }
@@ -483,7 +485,7 @@ version( unittest )
             {
                 synchronized( mutex )
                 {
-                    ++numReady;
+                    ++numReady.assumeLocal;
                     condReady.notify();
                 }
             }
@@ -491,7 +493,7 @@ version( unittest )
             {
                 synchronized( synLoop )
                 {
-                    if( numDone >= numWaiters )
+                    if( numDone.assumeLocal >= numWaiters )
                         break;
                 }
                 Thread.yield();
@@ -503,27 +505,27 @@ version( unittest )
         }
 
         group.joinAll();
-        assert( numTotal == numWaiters * numTries );
+        assert( numTotal.assumeLocal == numWaiters * numTries );
     }
 
 
     void testNotifyAll()
     {
-        auto mutex      = new Mutex;
-        auto condReady  = new Condition( mutex );
-        int  numWaiters = 10;
-        int  numReady   = 0;
-        int  numDone    = 0;
-        bool alert      = false;
+        auto        mutex      = new Mutex;
+        auto        condReady  = new Condition( mutex );
+        enum int    numWaiters = 10;
+        shared int  numReady   = 0;
+        shared int  numDone    = 0;
+        shared bool alert      = false;
 
         void waiter()
         {
             synchronized( mutex )
             {
-                ++numReady;
-                while( !alert )
+                ++numReady.assumeLocal;
+                while( !alert.assumeLocal )
                     condReady.wait();
-                ++numDone;
+                ++numDone.assumeLocal;
             }
         }
 
@@ -536,9 +538,9 @@ version( unittest )
         {
             synchronized( mutex )
             {
-                if( numReady >= numWaiters )
+                if( numReady.assumeLocal >= numWaiters )
                 {
-                    alert = true;
+                    alert.assumeLocal = true;
                     condReady.notifyAll();
                     break;
                 }
@@ -546,27 +548,27 @@ version( unittest )
             Thread.yield();
         }
         group.joinAll();
-        assert( numReady == numWaiters && numDone == numWaiters );
+        assert( numReady.assumeLocal == numWaiters && numDone.assumeLocal == numWaiters );
     }
 
 
     void testWaitTimeout()
     {
-        auto mutex      = new Mutex;
-        auto condReady  = new Condition( mutex );
-        bool waiting    = false;
-        bool alertedOne = true;
-        bool alertedTwo = true;
+        auto        mutex      = new Mutex;
+        auto        condReady  = new Condition( mutex );
+        shared bool waiting    = false;
+        shared bool alertedOne = true;
+        shared bool alertedTwo = true;
 
         void waiter()
         {
             synchronized( mutex )
             {
-                waiting    = true;
+                waiting.assumeLocal    = true;
                 // we never want to miss the notification (30s)
-                alertedOne = condReady.wait( dur!"seconds"(30) );
+                alertedOne.assumeLocal = condReady.wait( dur!"seconds"(30) );
                 // but we don't want to wait long for the timeout (10ms)
-                alertedTwo = condReady.wait( dur!"msecs"(10) );
+                alertedTwo.assumeLocal = condReady.wait( dur!"msecs"(10) );
             }
         }
 
@@ -577,7 +579,7 @@ version( unittest )
         {
             synchronized( mutex )
             {
-                if( waiting )
+                if( waiting.assumeLocal )
                 {
                     condReady.notify();
                     break;
@@ -586,9 +588,9 @@ version( unittest )
             Thread.yield();
         }
         thread.join();
-        assert( waiting );
-        assert( alertedOne );
-        assert( !alertedTwo );
+        assert( waiting.assumeLocal );
+        assert( alertedOne.assumeLocal );
+        assert( !alertedTwo.assumeLocal );
     }
 
 

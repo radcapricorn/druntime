@@ -77,13 +77,14 @@ shared class Semaphore_
     {
         version( Windows )
         {
-            m_hndl = CreateSemaphoreA( null, count, int.max, null );
-            if( m_hndl == m_hndl.init )
+            auto hndl = CreateSemaphoreA( null, count, int.max, null );
+            if( hndl == hndl.init )
                 throw new SyncException( "Unable to create semaphore" );
+            atomicStore!(MemoryOrder.rel)( m_hndl, cast(shared)hndl );
         }
         else version( OSX )
         {
-            auto rc = semaphore_create( mach_task_self(), &m_hndl, SYNC_POLICY_FIFO, count );
+            auto rc = semaphore_create( mach_task_self(), cast(semaphore_t*)&m_hndl, SYNC_POLICY_FIFO, count );
             if( rc )
                 throw new SyncException( "Unable to create semaphore" );
         }
@@ -100,12 +101,12 @@ shared class Semaphore_
     {
         version( Windows )
         {
-            BOOL rc = CloseHandle( m_hndl );
+            BOOL rc = CloseHandle( cast(HANDLE)m_hndl );
             assert( rc, "Unable to destroy semaphore" );
         }
         else version( OSX )
         {
-            auto rc = semaphore_destroy( mach_task_self(), m_hndl );
+            auto rc = semaphore_destroy( mach_task_self(), assumeLocal(m_hndl) );
             assert( !rc, "Unable to destroy semaphore" );
         }
         else version( Posix )
@@ -132,7 +133,7 @@ shared class Semaphore_
     {
         version( Windows )
         {
-            DWORD rc = WaitForSingleObject( m_hndl, INFINITE );
+            DWORD rc = WaitForSingleObject( cast(HANDLE)m_hndl, INFINITE );
             if( rc != WAIT_OBJECT_0 )
                 throw new SyncException( "Unable to wait for semaphore" );
         }
@@ -140,7 +141,7 @@ shared class Semaphore_
         {
             while( true )
             {
-                auto rc = semaphore_wait( m_hndl );
+                auto rc = semaphore_wait( assumeLocal(m_hndl) );
                 if( !rc )
                     return;
                 if( rc == KERN_ABORTED && errno == EINTR )
@@ -192,7 +193,7 @@ shared class Semaphore_
 
             while( period > maxWaitMillis )
             {
-                auto rc = WaitForSingleObject( m_hndl, cast(uint)
+                auto rc = WaitForSingleObject( cast(HANDLE)m_hndl, cast(uint)
                                                        maxWaitMillis.total!"msecs" );
                 switch( rc )
                 {
@@ -205,7 +206,7 @@ shared class Semaphore_
                     throw new SyncException( "Unable to wait for semaphore" );
                 }
             }
-            switch( WaitForSingleObject( m_hndl, cast(uint) period.total!"msecs" ) )
+            switch( WaitForSingleObject( cast(HANDLE)m_hndl, cast(uint) period.total!"msecs" ) )
             {
             case WAIT_OBJECT_0:
                 return true;
@@ -232,7 +233,7 @@ shared class Semaphore_
             }
             while( true )
             {
-                auto rc = semaphore_timedwait( m_hndl, t );
+                auto rc = semaphore_timedwait( assumeLocal(m_hndl), t );
                 if( !rc )
                     return true;
                 if( rc == KERN_OPERATION_TIMED_OUT )
@@ -270,12 +271,12 @@ shared class Semaphore_
     {
         version( Windows )
         {
-            if( !ReleaseSemaphore( m_hndl, 1, null ) )
+            if( !ReleaseSemaphore( cast(HANDLE)m_hndl, 1, null ) )
                 throw new SyncException( "Unable to notify semaphore" );
         }
         else version( OSX )
         {
-            auto rc = semaphore_signal( m_hndl );
+            auto rc = semaphore_signal( assumeLocal(m_hndl) );
             if( rc )
                 throw new SyncException( "Unable to notify semaphore" );
         }
@@ -302,7 +303,7 @@ shared class Semaphore_
     {
         version( Windows )
         {
-            switch( WaitForSingleObject( m_hndl, 0 ) )
+            switch( WaitForSingleObject( cast(HANDLE)m_hndl, 0 ) )
             {
             case WAIT_OBJECT_0:
                 return true;

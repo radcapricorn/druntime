@@ -20,6 +20,7 @@ public import core.sync.exception;
 private import core.sync.condition;
 private import core.sync.mutex;
 private import core.memory;
+private import core.atomic;
 
 version( Win32 )
 {
@@ -107,7 +108,7 @@ shared class ReadWriteMutex_
             throw new SyncException( "Unable to initialize mutex" );
         scope(failure) { destroy(m_writerQueue); GC.free(cast(void*)m_writerQueue); }
 
-        m_policy = policy;
+        atomicStore!(MemoryOrder.rel)(m_policy, policy);
         m_reader = new Reader;
         m_writer = new Writer;
     }
@@ -188,12 +189,12 @@ shared class ReadWriteMutex_
         {
             synchronized( m_commonMutex )
             {
-                ++m_numQueuedReaders;
-                scope(exit) --m_numQueuedReaders;
+                atomicOp!"+="(m_numQueuedReaders, 1);
+                scope(exit) atomicOp!"-="(m_numQueuedReaders, 1);
 
                 while( shouldQueueReader )
                     m_readerQueue.wait();
-                ++m_numActiveReaders;
+                atomicOp!"+="(m_numActiveReaders, 1);
             }
         }
 
@@ -205,9 +206,9 @@ shared class ReadWriteMutex_
         {
             synchronized( m_commonMutex )
             {
-                if( --m_numActiveReaders < 1 )
+                if( atomicOp!"-="(m_numActiveReaders, 1) < 1 )
                 {
-                    if( m_numQueuedWriters > 0 )
+                    if( atomicLoad!(MemoryOrder.acq)(m_numQueuedWriters) > 0 )
                         m_writerQueue.notify();
                 }
             }
@@ -228,7 +229,7 @@ shared class ReadWriteMutex_
             {
                 if( shouldQueueReader )
                     return false;
-                ++m_numActiveReaders;
+                atomicOp!"+="(m_numActiveReaders, 1);
                 return true;
             }
         }
@@ -237,13 +238,13 @@ shared class ReadWriteMutex_
     private:
         @property bool shouldQueueReader()
         {
-            if( m_numActiveWriters > 0 )
+            if( atomicLoad!(MemoryOrder.acq)(m_numActiveWriters) > 0 )
                 return true;
 
-            switch( m_policy )
+            switch( cast(Policy)m_policy )
             {
             case Policy.PREFER_WRITERS:
-                 return m_numQueuedWriters > 0;
+                 return atomicLoad!(MemoryOrder.acq)(m_numQueuedWriters) > 0;
 
             case Policy.PREFER_READERS:
             default:
@@ -293,12 +294,12 @@ shared class ReadWriteMutex_
         {
             synchronized( m_commonMutex )
             {
-                ++m_numQueuedWriters;
-                scope(exit) --m_numQueuedWriters;
+                atomicOp!"+="(m_numQueuedWriters, 1);
+                scope(exit) atomicOp!"-="(m_numQueuedWriters, 1);
 
                 while( shouldQueueWriter )
                     m_writerQueue.wait();
-                ++m_numActiveWriters;
+                atomicOp!"+="(m_numActiveWriters, 1);
             }
         }
 
@@ -310,21 +311,21 @@ shared class ReadWriteMutex_
         {
             synchronized( m_commonMutex )
             {
-                if( --m_numActiveWriters < 1 )
+                if( atomicOp!"-="(m_numActiveWriters, 1) < 1 )
                 {
-                    switch( m_policy )
+                    switch( cast(Policy)m_policy )
                     {
                     default:
                     case Policy.PREFER_READERS:
-                        if( m_numQueuedReaders > 0 )
+                        if( m_numQueuedReaders.assumeLocal > 0 )
                             m_readerQueue.notifyAll();
-                        else if( m_numQueuedWriters > 0 )
+                        else if( m_numQueuedWriters.assumeLocal > 0 )
                             m_writerQueue.notify();
                         break;
                     case Policy.PREFER_WRITERS:
-                        if( m_numQueuedWriters > 0 )
+                        if( m_numQueuedWriters.assumeLocal > 0 )
                             m_writerQueue.notify();
-                        else if( m_numQueuedReaders > 0 )
+                        else if( m_numQueuedReaders.assumeLocal > 0 )
                             m_readerQueue.notifyAll();
                     }
                 }
@@ -346,7 +347,7 @@ shared class ReadWriteMutex_
             {
                 if( shouldQueueWriter )
                     return false;
-                ++m_numActiveWriters;
+                atomicOp!"+="(m_numActiveWriters, 1);
                 return true;
             }
         }
@@ -355,13 +356,13 @@ shared class ReadWriteMutex_
     private:
         @property bool shouldQueueWriter()
         {
-            if( m_numActiveWriters > 0 ||
-                m_numActiveReaders > 0 )
+            if( atomicLoad!(MemoryOrder.acq)(m_numActiveWriters) > 0 ||
+                atomicLoad!(MemoryOrder.acq)(m_numActiveReaders) > 0 )
                 return true;
-            switch( m_policy )
+            switch( cast(Policy)m_policy )
             {
             case Policy.PREFER_READERS:
-                return m_numQueuedReaders > 0;
+                return atomicLoad!(MemoryOrder.acq)(m_numQueuedReaders) > 0;
 
             case Policy.PREFER_WRITERS:
             default:
@@ -371,7 +372,7 @@ shared class ReadWriteMutex_
         return false;
         }
 
-        struct MonitorProxy
+        shared struct MonitorProxy
         {
             Object.Monitor link;
         }

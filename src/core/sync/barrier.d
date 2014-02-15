@@ -19,6 +19,7 @@ module core.sync.barrier;
 public import core.sync.exception;
 private import core.sync.condition;
 private import core.sync.mutex;
+private import core.atomic;
 
 version( Win32 )
 {
@@ -68,9 +69,9 @@ shared class Barrier_
     {
         m_lock  = new Mutex;
         m_cond  = new Condition( m_lock );
-        m_group = 0;
-        m_limit = limit;
-        m_count = limit;
+        atomicStore!(MemoryOrder.rel)(m_group, 0);
+        atomicStore!(MemoryOrder.rel)(m_limit, limit);
+        atomicStore!(MemoryOrder.rel)(m_count, limit);
     }
 
 
@@ -89,15 +90,15 @@ shared class Barrier_
     {
         synchronized( m_lock )
         {
-            uint group = m_group;
+            auto group = m_group.assumeLocal;
 
-            if( --m_count == 0 )
+            if( --m_count.assumeLocal == 0 )
             {
-                m_group++;
-                m_count = m_limit;
+                m_group.assumeLocal++;
+                m_count.assumeLocal = m_limit.assumeLocal;
                 m_cond.notifyAll();
             }
-            while( group == m_group )
+            while( group == m_group.assumeLocal )
                 m_cond.wait();
         }
     }
@@ -126,22 +127,22 @@ version( unittest )
 
     unittest
     {
-        int  numThreads = 10;
-        auto barrier    = new Barrier( numThreads );
-        auto synInfo    = new Object;
-        int  numReady   = 0;
-        int  numPassed  = 0;
+        enum int   numThreads = 10;
+        auto       barrier    = new Barrier( numThreads );
+        auto       synInfo    = new shared Object;
+        shared int numReady   = 0;
+        shared int numPassed  = 0;
 
         void threadFn()
         {
             synchronized( synInfo )
             {
-                ++numReady;
+                ++numReady.assumeLocal;
             }
             barrier.wait();
             synchronized( synInfo )
             {
-                ++numPassed;
+                ++numPassed.assumeLocal;
             }
         }
 
@@ -152,6 +153,6 @@ version( unittest )
             group.create( &threadFn );
         }
         group.joinAll();
-        assert( numReady == numThreads && numPassed == numThreads );
+        assert( numReady.assumeLocal == numThreads && numPassed.assumeLocal == numThreads );
     }
 }
