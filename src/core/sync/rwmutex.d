@@ -22,11 +22,7 @@ private import core.sync.mutex;
 private import core.memory;
 private import core.atomic;
 
-version( Win32 )
-{
-    private import core.sys.windows.windows;
-}
-else version( Posix )
+version( Posix )
 {
     private import core.sys.posix.pthread;
 }
@@ -89,30 +85,26 @@ shared class ReadWriteMutex_
      *  policy = The policy to use.
      *
      * Throws:
-     *  SyncException on error.
+     *  SyncError on error.
      */
-    this( Policy policy = Policy.PREFER_WRITERS )
+    this( Policy policy = Policy.PREFER_WRITERS ) shared
     {
         m_commonMutex = new Mutex;
         if( !m_commonMutex )
-            throw new SyncException( "Unable to initialize mutex" );
-        scope(failure) { destroy(m_commonMutex); GC.free(cast(void*)m_commonMutex); }
+            throw new SyncError( "Unable to initialize mutex" );
 
         m_readerQueue = new Condition( m_commonMutex );
         if( !m_readerQueue )
-            throw new SyncException( "Unable to initialize mutex" );
-        scope(failure) { destroy(m_readerQueue); GC.free(cast(void*)m_readerQueue); }
+            throw new SyncError( "Unable to initialize mutex" );
 
         m_writerQueue = new Condition( m_commonMutex );
         if( !m_writerQueue )
-            throw new SyncException( "Unable to initialize mutex" );
-        scope(failure) { destroy(m_writerQueue); GC.free(cast(void*)m_writerQueue); }
+            throw new SyncError( "Unable to initialize mutex" );
 
         atomicStore!(MemoryOrder.rel)(m_policy, policy);
         m_reader = new Reader;
         m_writer = new Writer;
     }
-
 
     ////////////////////////////////////////////////////////////////////////////
     // General Properties
@@ -175,7 +167,7 @@ shared class ReadWriteMutex_
         /**
          * Initializes a read/write mutex reader proxy object.
          */
-        this()
+        this() shared
         {
             m_proxy.link = this;
             this.__monitor = cast(void*)&m_proxy;
@@ -261,7 +253,7 @@ shared class ReadWriteMutex_
 
         MonitorProxy    m_proxy;
     }
-    
+
     alias Reader = shared(Reader_);
 
 
@@ -280,7 +272,7 @@ shared class ReadWriteMutex_
         /**
          * Initializes a read/write mutex writer proxy object.
          */
-        this()
+        this() shared
         {
             m_proxy.link = this;
             this.__monitor = cast(void*)&m_proxy;
@@ -317,15 +309,15 @@ shared class ReadWriteMutex_
                     {
                     default:
                     case Policy.PREFER_READERS:
-                        if( m_numQueuedReaders.assumeLocal > 0 )
+                        if( m_numQueuedReaders.assumeUnshared > 0 )
                             m_readerQueue.notifyAll();
-                        else if( m_numQueuedWriters.assumeLocal > 0 )
+                        else if( m_numQueuedWriters.assumeUnshared > 0 )
                             m_writerQueue.notify();
                         break;
                     case Policy.PREFER_WRITERS:
-                        if( m_numQueuedWriters.assumeLocal > 0 )
+                        if( m_numQueuedWriters.assumeUnshared > 0 )
                             m_writerQueue.notify();
-                        else if( m_numQueuedReaders.assumeLocal > 0 )
+                        else if( m_numQueuedReaders.assumeUnshared > 0 )
                             m_readerQueue.notifyAll();
                     }
                 }

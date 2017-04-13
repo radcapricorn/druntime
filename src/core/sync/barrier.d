@@ -21,11 +21,7 @@ private import core.sync.condition;
 private import core.sync.mutex;
 private import core.atomic;
 
-version( Win32 )
-{
-    private import core.sys.windows.windows;
-}
-else version( Posix )
+version( Posix )
 {
     private import core.stdc.errno;
     private import core.sys.posix.pthread;
@@ -58,9 +54,9 @@ shared class Barrier_
      *  limit = The number of waiting threads to release in unison.
      *
      * Throws:
-     *  SyncException on error.
+     *  SyncError on error.
      */
-    this( uint limit )
+    this( uint limit ) shared
     in
     {
         assert( limit > 0 );
@@ -84,21 +80,21 @@ shared class Barrier_
      * Wait for the pre-determined number of threads and then proceed.
      *
      * Throws:
-     *  SyncException on error.
+     *  SyncError on error.
      */
     void wait()
     {
         synchronized( m_lock )
         {
-            auto group = m_group.assumeLocal;
+            auto group = m_group.assumeUnshared;
 
-            if( --m_count.assumeLocal == 0 )
+            if( --m_count.assumeUnshared == 0 )
             {
-                m_group.assumeLocal++;
-                m_count.assumeLocal = m_limit.assumeLocal;
+                m_group.assumeUnshared++;
+                m_count.assumeUnshared = m_limit.assumeUnshared;
                 m_cond.notifyAll();
             }
-            while( group == m_group.assumeLocal )
+            while( group == m_group.assumeUnshared )
                 m_cond.wait();
         }
     }
@@ -137,12 +133,12 @@ version( unittest )
         {
             synchronized( synInfo )
             {
-                ++numReady.assumeLocal;
+                ++numReady.assumeUnshared;
             }
             barrier.wait();
             synchronized( synInfo )
             {
-                ++numPassed.assumeLocal;
+                ++numPassed.assumeUnshared;
             }
         }
 
@@ -153,6 +149,6 @@ version( unittest )
             group.create( &threadFn );
         }
         group.joinAll();
-        assert( numReady.assumeLocal == numThreads && numPassed.assumeLocal == numThreads );
+        assert( numReady.assumeUnshared == numThreads && numPassed.assumeUnshared == numThreads );
     }
 }

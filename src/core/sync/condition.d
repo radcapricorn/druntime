@@ -68,38 +68,40 @@ shared class Condition_
      *  m = The mutex with which this condition will be associated.
      *
      * Throws:
-     *  SyncException on error.
+     *  SyncError on error.
      */
-    this( Mutex m )
+    this( Mutex m ) shared nothrow @safe
     {
         version( Windows )
         {
-            auto sem = CreateSemaphoreA( null, 1, 1, null );
-            if( sem == sem.init )
-                throw new SyncException( "Unable to initialize condition" );
-            atomicStore!( MemoryOrder.rel )( m_blockLock, cast(shared) sem );
-            scope(failure) CloseHandle( cast(HANDLE) m_blockLock );
+            m_blockLock = CreateSemaphoreA( null, 1, 1, null );
+            if( m_blockLock == m_blockLock.init )
+                throw new SyncError( "Unable to initialize condition" );
+            scope(failure) CloseHandle( m_blockLock );
 
-            sem = CreateSemaphoreA( null, 0, int.max, null );
-            if( sem == sem.init )
-                throw new SyncException( "Unable to initialize condition" );
-            atomicStore!( MemoryOrder.rel )( m_blockQueue, cast(shared) sem );
-            scope(failure) CloseHandle( cast(HANDLE) m_blockQueue );
+            m_blockQueue = CreateSemaphoreA( null, 0, int.max, null );
+            if( m_blockQueue == m_blockQueue.init )
+                throw new SyncError( "Unable to initialize condition" );
+            scope(failure) CloseHandle( m_blockQueue );
 
-            InitializeCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
+            () @trusted {
+                InitializeCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
+            }();
             m_assocMutex = m;
         }
         else version( Posix )
         {
             m_assocMutex = m;
-            int rc = pthread_cond_init( cast(pthread_cond_t*)&m_hndl, null );
+            int rc = () @trusted {
+                return pthread_cond_init( cast(pthread_cond_t*)&m_hndl, null );
+            }();
             if( rc )
-                throw new SyncException( "Unable to initialize condition" );
+                throw new SyncError( "Unable to initialize condition" );
         }
     }
 
 
-    ~this()
+    ~this() shared
     {
         version( Windows )
         {
@@ -133,6 +135,12 @@ shared class Condition_
         return m_assocMutex;
     }
 
+    // undocumented function for internal use
+    final @property Mutex mutex_nothrow() pure nothrow @safe @nogc
+    {
+        return m_assocMutex;
+    }
+
 
     ////////////////////////////////////////////////////////////////////////////
     // General Actions
@@ -143,7 +151,7 @@ shared class Condition_
      * Wait until notified.
      *
      * Throws:
-     *  SyncException on error.
+     *  SyncError on error.
      */
     void wait()
     {
@@ -155,7 +163,7 @@ shared class Condition_
         {
             int rc = pthread_cond_wait( cast(pthread_cond_t*)&m_hndl, m_assocMutex.handleAddr() );
             if( rc )
-                throw new SyncException( "Unable to wait for condition" );
+                throw new SyncError( "Unable to wait for condition" );
         }
     }
 
@@ -171,7 +179,7 @@ shared class Condition_
      *  val must be non-negative.
      *
      * Throws:
-     *  SyncException on error.
+     *  SyncError on error.
      *
      * Returns:
      *  true if notified before the timeout and false if not.
@@ -208,7 +216,7 @@ shared class Condition_
                 return true;
             if( rc == ETIMEDOUT )
                 return false;
-            throw new SyncException( "Unable to wait for condition" );
+            throw new SyncError( "Unable to wait for condition" );
         }
     }
 
@@ -217,7 +225,7 @@ shared class Condition_
      * Notifies one waiter.
      *
      * Throws:
-     *  SyncException on error.
+     *  SyncError on error.
      */
     void notify()
     {
@@ -229,7 +237,7 @@ shared class Condition_
         {
             int rc = pthread_cond_signal( cast(pthread_cond_t*)&m_hndl );
             if( rc )
-                throw new SyncException( "Unable to notify condition" );
+                throw new SyncError( "Unable to notify condition" );
         }
     }
 
@@ -238,7 +246,7 @@ shared class Condition_
      * Notifies all waiters.
      *
      * Throws:
-     *  SyncException on error.
+     *  SyncError on error.
      */
     void notifyAll()
     {
@@ -250,7 +258,7 @@ shared class Condition_
         {
             int rc = pthread_cond_broadcast( cast(pthread_cond_t*)&m_hndl );
             if( rc )
-                throw new SyncException( "Unable to notify condition" );
+                throw new SyncError( "Unable to notify condition" );
         }
     }
 
@@ -282,7 +290,7 @@ private:
             EnterCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
             scope(failure) LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
 
-            if( (numSignalsLeft = m_numWaitersToUnblock.assumeLocal) != 0 )
+            if( (numSignalsLeft = m_numWaitersToUnblock.assumeUnshared) != 0 )
             {
                 if ( timedOut )
                 {
@@ -296,10 +304,10 @@ private:
                     else
                     {
                         // spurious wakeup pending!!
-                        m_numWaitersGone.assumeLocal = 1;
+                        m_numWaitersGone.assumeUnshared = 1;
                     }
                 }
-                if( --m_numWaitersToUnblock.assumeLocal == 0 )
+                if( --m_numWaitersToUnblock.assumeUnshared == 0 )
                 {
                     if( atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked ) != 0 )
                     {
@@ -309,22 +317,22 @@ private:
                         // do not open the gate below again
                         numSignalsLeft = 0;
                     }
-                    else if( (numWaitersGone = m_numWaitersGone.assumeLocal) != 0 )
+                    else if( (numWaitersGone = m_numWaitersGone.assumeUnshared) != 0 )
                     {
-                        m_numWaitersGone.assumeLocal = 0;
+                        m_numWaitersGone.assumeUnshared = 0;
                     }
                 }
             }
-            else if( ++m_numWaitersGone.assumeLocal == int.max / 2 )
+            else if( ++m_numWaitersGone.assumeUnshared == int.max / 2 )
             {
                 // timeout/canceled or spurious event :-)
                 rc = WaitForSingleObject( cast(HANDLE) m_blockLock, INFINITE );
                 assert( rc == WAIT_OBJECT_0 );
                 // something is going on here - test of timeouts?
-                atomicOp!"-="( m_numWaitersBlocked, m_numWaitersGone.assumeLocal );
+                atomicOp!"-="( m_numWaitersBlocked, m_numWaitersGone.assumeUnshared );
                 rc = ReleaseSemaphore( cast(HANDLE) m_blockLock, 1, null );
                 assert( rc == WAIT_OBJECT_0 );
-                m_numWaitersGone.assumeLocal = 0;
+                m_numWaitersGone.assumeUnshared = 0;
             }
 
             LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
@@ -359,7 +367,7 @@ private:
             EnterCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
             scope(failure) LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
 
-            if( m_numWaitersToUnblock.assumeLocal != 0 )
+            if( m_numWaitersToUnblock.assumeUnshared != 0 )
             {
                 if( atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked ) == 0 )
                 {
@@ -368,33 +376,33 @@ private:
                 }
                 if( all )
                 {
-                    m_numWaitersToUnblock.assumeLocal += atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked );
+                    m_numWaitersToUnblock.assumeUnshared += atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked );
                     atomicStore!( MemoryOrder.rel )( m_numWaitersBlocked, 0 );
                 }
                 else
                 {
-                    ++m_numWaitersToUnblock.assumeLocal;
+                    ++m_numWaitersToUnblock.assumeUnshared;
                     atomicOp!"-="( m_numWaitersBlocked, 1 );
                 }
                 LeaveCriticalSection( cast(CRITICAL_SECTION*) &m_unblockLock );
             }
-            else if( atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked ) > m_numWaitersGone.assumeLocal )
+            else if( atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked ) > m_numWaitersGone.assumeUnshared )
             {
                 rc = WaitForSingleObject( cast(HANDLE) m_blockLock, INFINITE );
                 assert( rc == WAIT_OBJECT_0 );
-                if( 0 != m_numWaitersGone.assumeLocal )
+                if( 0 != m_numWaitersGone.assumeUnshared )
                 {
-                    atomicOp!"-="( m_numWaitersBlocked, m_numWaitersGone.assumeLocal );
-                    m_numWaitersGone.assumeLocal = 0;
+                    atomicOp!"-="( m_numWaitersBlocked, m_numWaitersGone.assumeUnshared );
+                    m_numWaitersGone.assumeUnshared = 0;
                 }
                 if( all )
                 {
-                    m_numWaitersToUnblock.assumeLocal = atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked );
+                    m_numWaitersToUnblock.assumeUnshared = atomicLoad!( MemoryOrder.acq )( m_numWaitersBlocked );
                     atomicStore!( MemoryOrder.rel )( m_numWaitersBlocked, 0 );
                 }
                 else
                 {
-                    m_numWaitersToUnblock.assumeLocal = 1;
+                    m_numWaitersToUnblock.assumeUnshared = 1;
                     atomicOp!"-="( m_numWaitersBlocked, 1 );
                 }
                 LeaveCriticalSection( cast(CRITICAL_SECTION*)&m_unblockLock );
@@ -458,17 +466,17 @@ version( unittest )
             {
                 synchronized( mutex )
                 {
-                    while( numReady.assumeLocal < 1 )
+                    while( numReady.assumeUnshared < 1 )
                     {
                         condReady.wait();
                     }
-                    --numReady.assumeLocal;
-                    ++numTotal.assumeLocal;
+                    --numReady.assumeUnshared;
+                    ++numTotal.assumeUnshared;
                 }
 
                 synchronized( synLoop )
                 {
-                    ++numDone.assumeLocal;
+                    ++numDone.assumeUnshared;
                 }
                 semDone.wait();
             }
@@ -485,7 +493,7 @@ version( unittest )
             {
                 synchronized( mutex )
                 {
-                    ++numReady.assumeLocal;
+                    ++numReady.assumeUnshared;
                     condReady.notify();
                 }
             }
@@ -493,7 +501,7 @@ version( unittest )
             {
                 synchronized( synLoop )
                 {
-                    if( numDone.assumeLocal >= numWaiters )
+                    if( numDone.assumeUnshared >= numWaiters )
                         break;
                 }
                 Thread.yield();
@@ -505,7 +513,7 @@ version( unittest )
         }
 
         group.joinAll();
-        assert( numTotal.assumeLocal == numWaiters * numTries );
+        assert( numTotal.assumeUnshared == numWaiters * numTries );
     }
 
 
@@ -522,10 +530,10 @@ version( unittest )
         {
             synchronized( mutex )
             {
-                ++numReady.assumeLocal;
-                while( !alert.assumeLocal )
+                ++numReady.assumeUnshared;
+                while( !alert.assumeUnshared )
                     condReady.wait();
-                ++numDone.assumeLocal;
+                ++numDone.assumeUnshared;
             }
         }
 
@@ -538,9 +546,9 @@ version( unittest )
         {
             synchronized( mutex )
             {
-                if( numReady.assumeLocal >= numWaiters )
+                if( numReady.assumeUnshared >= numWaiters )
                 {
-                    alert.assumeLocal = true;
+                    alert.assumeUnshared = true;
                     condReady.notifyAll();
                     break;
                 }
@@ -548,7 +556,7 @@ version( unittest )
             Thread.yield();
         }
         group.joinAll();
-        assert( numReady.assumeLocal == numWaiters && numDone.assumeLocal == numWaiters );
+        assert( numReady.assumeUnshared == numWaiters && numDone.assumeUnshared == numWaiters );
     }
 
 
@@ -564,11 +572,11 @@ version( unittest )
         {
             synchronized( mutex )
             {
-                waiting.assumeLocal    = true;
+                waiting.assumeUnshared    = true;
                 // we never want to miss the notification (30s)
-                alertedOne.assumeLocal = condReady.wait( dur!"seconds"(30) );
+                alertedOne.assumeUnshared = condReady.wait( dur!"seconds"(30) );
                 // but we don't want to wait long for the timeout (10ms)
-                alertedTwo.assumeLocal = condReady.wait( dur!"msecs"(10) );
+                alertedTwo.assumeUnshared = condReady.wait( dur!"msecs"(10) );
             }
         }
 
@@ -579,7 +587,7 @@ version( unittest )
         {
             synchronized( mutex )
             {
-                if( waiting.assumeLocal )
+                if( waiting.assumeUnshared )
                 {
                     condReady.notify();
                     break;
@@ -588,9 +596,9 @@ version( unittest )
             Thread.yield();
         }
         thread.join();
-        assert( waiting.assumeLocal );
-        assert( alertedOne.assumeLocal );
-        assert( !alertedTwo.assumeLocal );
+        assert( waiting.assumeUnshared );
+        assert( alertedOne.assumeUnshared );
+        assert( !alertedTwo.assumeUnshared );
     }
 
 
