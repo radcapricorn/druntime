@@ -37,6 +37,7 @@ else version( Darwin )
     private import core.stdc.errno;
     private import core.sys.posix.time;
     private import core.sys.darwin.mach.semaphore;
+    private import core.atomic;
 }
 else version( Posix )
 {
@@ -114,7 +115,7 @@ shared class Semaphore_
         }
         else version( Darwin )
         {
-            auto rc = semaphore_destroy( mach_task_self(), assumeLocal(m_hndl) );
+            auto rc = semaphore_destroy( mach_task_self(), assumeUnshared(m_hndl) );
             assert( !rc, "Unable to destroy semaphore" );
         }
         else version( Posix )
@@ -149,7 +150,7 @@ shared class Semaphore_
         {
             while( true )
             {
-                auto rc = semaphore_wait( assumeLocal(m_hndl) );
+                auto rc = semaphore_wait( assumeUnshared(m_hndl) );
                 if( !rc )
                     return;
                 if( rc == KERN_ABORTED && errno == EINTR )
@@ -238,7 +239,7 @@ shared class Semaphore_
                 period.split!("seconds", "nsecs")(t.tv_sec, t.tv_nsec);
             while( true )
             {
-                auto rc = semaphore_timedwait( assumeLocal(m_hndl), t );
+                auto rc = semaphore_timedwait( assumeUnshared(m_hndl), t );
                 if( !rc )
                     return true;
                 if( rc == KERN_OPERATION_TIMED_OUT )
@@ -281,7 +282,7 @@ shared class Semaphore_
         }
         else version( Darwin )
         {
-            auto rc = semaphore_signal( assumeLocal(m_hndl) );
+            auto rc = semaphore_signal( assumeUnshared(m_hndl) );
             if( rc )
                 throw new SyncError( "Unable to notify semaphore" );
         }
